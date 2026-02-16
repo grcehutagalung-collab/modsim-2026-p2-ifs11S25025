@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+import os
 
 # ===============================
 #   CONFIGURASI DASHBOARD
@@ -12,27 +13,36 @@ st.set_page_config(
     layout="wide"
 )
 
-# Tema Plotly default
 px.defaults.template = "plotly_white"
-px.defaults.color_continuous_scale = "Blues"
+
+st.title("📊 Dashboard Visualisasi Data Kuesioner")
 
 # ===============================
 #   LOAD DATA
 # ===============================
-st.title("📊 Dashboard Visualisasi Data Kuesioner")
-
 uploaded_data = "data_kuesioner.xlsx"
-df = pd.read_excel(uploaded_data)
+
+if not os.path.exists(uploaded_data):
+    st.error("File 'data_kuesioner.xlsx' tidak ditemukan.")
+    st.stop()
+
+try:
+    df = pd.read_excel(uploaded_data)
+except Exception as e:
+    st.error(f"Gagal membaca file: {e}")
+    st.stop()
 
 question_cols = [col for col in df.columns if col.startswith("Q")]
 
-# Jika tidak ada kolom pertanyaan, hentikan lebih awal
 if not question_cols:
-    st.error("Tidak ditemukan kolom pertanyaan (kolom yang diawali 'Q') di file input.")
+    st.error("Tidak ditemukan kolom pertanyaan (awalan 'Q').")
     st.stop()
 
+# Urutan skala konsisten
+skala_order = ["SS", "S", "CS", "N", "TS", "STS"]
+
 # ===============================
-#   MAPPING NILAI
+#   MAPPING NILAI NUMERIK
 # ===============================
 mapping = {
     "SS": 5,
@@ -43,15 +53,7 @@ mapping = {
     "STS": 1
 }
 
-df_numeric = (
-    df[question_cols]
-    .replace(mapping)
-    .apply(pd.to_numeric, errors="coerce")
-)
-
-# Jika semua nilai menjadi NaN setelah mapping, beri tahu user
-if df_numeric.isna().all(axis=None):
-    st.warning("Semua nilai pertanyaan tidak valid setelah pemetaan. Periksa format jawaban di file input.")
+df_numeric = df[question_cols].applymap(lambda x: mapping.get(x, None))
 
 # ===============================
 #   SIDEBAR
@@ -70,103 +72,137 @@ chart_choice = st.sidebar.selectbox(
 )
 
 # ===============================
-#   HALAMAN GRAFIK
+#   1️⃣ DISTRIBUSI SEMUA JAWABAN
 # ===============================
-
-# --- 1. Distribusi Semua Jawaban
 if chart_choice == "Distribusi Semua Jawaban (Bar Chart)":
-    st.subheader("📊 Distribusi Semua Jawaban Kuesioner")
+    st.subheader("📊 Distribusi Semua Jawaban")
 
-    all_counts = df[question_cols].stack().dropna().value_counts().reset_index()
+    all_counts = (
+        df[question_cols]
+        .stack()
+        .value_counts()
+        .reindex(skala_order, fill_value=0)
+        .reset_index()
+    )
     all_counts.columns = ["Jawaban", "Jumlah"]
 
     fig = px.bar(
         all_counts,
         x="Jawaban",
         y="Jumlah",
-        color="Jawaban",
         text="Jumlah",
+        color="Jawaban",
+        category_orders={"Jawaban": skala_order},
         color_discrete_sequence=px.colors.qualitative.Set2
     )
 
     fig.update_traces(textposition="outside")
     st.plotly_chart(fig, use_container_width=True)
 
-
-# --- 2. Pie Chart Proporsi Jawaban
+# ===============================
+#   2️⃣ PIE CHART
+# ===============================
 elif chart_choice == "Proporsi Jawaban (Pie Chart)":
-    st.subheader("🥧 Proporsi Jawaban Keseluruhan")
+    st.subheader("🥧 Proporsi Jawaban")
 
-    all_counts = df[question_cols].stack().dropna().value_counts().reset_index()
+    all_counts = (
+        df[question_cols]
+        .stack()
+        .value_counts()
+        .reindex(skala_order, fill_value=0)
+        .reset_index()
+    )
     all_counts.columns = ["Jawaban", "Jumlah"]
 
     fig = px.pie(
         all_counts,
         names="Jawaban",
         values="Jumlah",
-        hole=0.35,
-        color_discrete_sequence=px.colors.qualitative.Pastel
+        hole=0.4,
+        category_orders={"Jawaban": skala_order}
     )
-    fig.update_traces(textinfo="percent+label")
 
+    fig.update_traces(textinfo="percent+label")
     st.plotly_chart(fig, use_container_width=True)
 
-
-# --- 3. Stacked Bar per Pertanyaan
+# ===============================
+#   3️⃣ STACKED BAR
+# ===============================
 elif chart_choice == "Distribusi Jawaban per Pertanyaan (Stacked Bar)":
     st.subheader("📚 Distribusi Jawaban per Pertanyaan")
 
     stack_data = pd.DataFrame()
+
     for q in question_cols:
-        temp = df[q].dropna().value_counts().rename(q)
-        stack_data = pd.concat([stack_data, temp], axis=1)
-    stack_data = stack_data.fillna(0)
+        counts = (
+            df[q]
+            .value_counts()
+            .reindex(skala_order, fill_value=0)
+        )
+        stack_data[q] = counts
 
     fig = go.Figure()
 
-    for label in stack_data.index:
+    for label in skala_order:
         fig.add_trace(go.Bar(
             name=label,
             x=stack_data.columns,
-            y=stack_data.loc[label],
+            y=stack_data.loc[label]
         ))
 
-    fig.update_layout(barmode="stack")
+    fig.update_layout(
+        barmode="stack",
+        xaxis_title="Pertanyaan",
+        yaxis_title="Jumlah Respon"
+    )
+
     st.plotly_chart(fig, use_container_width=True)
 
-
-# --- 4. Rata-Rata Skor Tiap Pertanyaan
+# ===============================
+#   4️⃣ RATA-RATA SKOR
+# ===============================
 elif chart_choice == "Rata-Rata Skor Tiap Pertanyaan":
-    st.subheader("⭐ Rata-Rata Skor Tiap Pertanyaan")
+    st.subheader("⭐ Rata-Rata Skor")
 
-    mean_scores = df_numeric.mean(axis=0).reset_index()
+    mean_scores = df_numeric.mean().reset_index()
     mean_scores.columns = ["Pertanyaan", "Skor"]
 
     fig = px.bar(
         mean_scores,
         x="Pertanyaan",
         y="Skor",
-        text="Skor",
+        text=mean_scores["Skor"].round(2),
         color="Skor",
-        color_continuous_scale="Peach"
+        color_continuous_scale="Blues"
     )
+
     fig.update_traces(textposition="outside")
+    fig.update_layout(yaxis_range=[0,5])
 
     st.plotly_chart(fig, use_container_width=True)
 
-
-# --- 5. Positif / Netral / Negatif
+# ===============================
+#   5️⃣ POSITIF / NETRAL / NEGATIF
+# ===============================
 elif chart_choice == "Kategori Positif / Netral / Negatif":
-    st.subheader("😀😐🙁 Distribusi Kategori Jawaban")
+    st.subheader("😀😐🙁 Distribusi Kategori")
 
     kategori_map = {
-        "SS": "Positif", "S": "Positif", "CS": "Positif",
+        "SS": "Positif",
+        "S": "Positif",
+        "CS": "Positif",
         "N": "Netral",
-        "TS": "Negatif", "STS": "Negatif"
+        "TS": "Negatif",
+        "STS": "Negatif"
     }
 
-    flat = df[question_cols].stack().dropna().map(kategori_map)
-    kategori_counts = flat.value_counts().reset_index()
+    flat = df[question_cols].stack().map(kategori_map)
+
+    kategori_counts = flat.value_counts().reindex(
+        ["Positif", "Netral", "Negatif"],
+        fill_value=0
+    ).reset_index()
+
     kategori_counts.columns = ["Kategori", "Jumlah"]
 
     fig = px.bar(
@@ -175,51 +211,45 @@ elif chart_choice == "Kategori Positif / Netral / Negatif":
         y="Jumlah",
         text="Jumlah",
         color="Kategori",
-        color_discrete_sequence=["#2ecc71", "#f1c40f", "#e74c3c"]
+        color_discrete_map={
+            "Positif": "#2ecc71",
+            "Netral": "#f1c40f",
+            "Negatif": "#e74c3c"
+        }
     )
 
     fig.update_traces(textposition="outside")
     st.plotly_chart(fig, use_container_width=True)
 
-
-# --- 6. Bonus Radar Chart
+# ===============================
+#   6️⃣ RADAR CHART
+# ===============================
 elif chart_choice == "Bonus Radar Chart":
     st.subheader("🛡️ Radar Chart Rata-Rata Skor")
-    mean_scores = df_numeric.mean(axis=0)
 
-    # Jika kurang dari 3 variabel, radar kurang informatif/bermasalah — tampilkan bar chart sebagai fallback
-    labels = mean_scores.index.tolist()
-    values = mean_scores.values.tolist()
+    mean_scores = df_numeric.mean()
 
-    if len(values) < 3:
-        st.warning("Radar chart memerlukan minimal 3 pertanyaan. Menampilkan bar chart sebagai gantinya.")
-        mean_df = mean_scores.reset_index()
-        mean_df.columns = ["Pertanyaan", "Skor"]
-        fig = px.bar(
-            mean_df,
-            x="Pertanyaan",
-            y="Skor",
-            text="Skor",
-            color="Skor",
-            color_continuous_scale="Peach"
-        )
-        fig.update_traces(textposition="outside")
-        st.plotly_chart(fig, use_container_width=True)
+    if len(mean_scores) < 3:
+        st.warning("Radar chart memerlukan minimal 3 pertanyaan.")
     else:
-        # Tutup polygon dengan mengulang titik pertama di akhir
-        labels_closed = labels + [labels[0]]
-        values_closed = values + [values[0]]
+        labels = mean_scores.index.tolist()
+        values = mean_scores.values.tolist()
+
+        # tutup polygon
+        labels += [labels[0]]
+        values += [values[0]]
 
         fig = go.Figure()
+
         fig.add_trace(go.Scatterpolar(
-            r=values_closed,
-            theta=labels_closed,
-            fill="toself",
-            line=dict(width=2)
+            r=values,
+            theta=labels,
+            fill="toself"
         ))
 
         fig.update_layout(
-            polar=dict(radialaxis=dict(visible=True, range=[0, 5]))
+            polar=dict(radialaxis=dict(visible=True, range=[0,5])),
+            showlegend=False
         )
 
         st.plotly_chart(fig, use_container_width=True)
