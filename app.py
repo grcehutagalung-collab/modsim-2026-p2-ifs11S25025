@@ -2,10 +2,9 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-import os
 
 # ===============================
-#   CONFIGURASI DASHBOARD
+# CONFIG PAGE
 # ===============================
 st.set_page_config(
     page_title="Dashboard Kuesioner",
@@ -13,38 +12,28 @@ st.set_page_config(
     layout="wide"
 )
 
-px.defaults.template = "plotly_white"
-
 st.title("📊 Dashboard Visualisasi Data Kuesioner")
 
 # ===============================
-#   LOAD DATA
+# LOAD DATA
 # ===============================
-uploaded_data = "data_kuesioner.xlsx"
+@st.cache_data
+def load_data(path):
+    return pd.read_excel(path)
 
-if not os.path.exists(uploaded_data):
-    st.error("File 'data_kuesioner.xlsx' tidak ditemukan.")
-    st.stop()
-
-try:
-    df = pd.read_excel(uploaded_data)
-except Exception as e:
-    st.error(f"Gagal membaca file: {e}")
-    st.stop()
+file_path = "data_kuesioner.xlsx"
+df = load_data(file_path)
 
 question_cols = [col for col in df.columns if col.startswith("Q")]
 
 if not question_cols:
-    st.error("Tidak ditemukan kolom pertanyaan (awalan 'Q').")
+    st.error("Tidak ditemukan kolom pertanyaan (Q1, Q2, dst)")
     st.stop()
 
-# Urutan skala konsisten
-skala_order = ["SS", "S", "CS", "N", "TS", "STS"]
-
 # ===============================
-#   MAPPING NILAI NUMERIK
+# MAPPING LIKERT
 # ===============================
-mapping = {
+likert_map = {
     "SS": 5,
     "S": 4,
     "CS": 4,
@@ -53,140 +42,105 @@ mapping = {
     "STS": 1
 }
 
-df_numeric = df[question_cols].applymap(lambda x: mapping.get(x, None))
+df_numeric = df[question_cols].replace(likert_map).apply(
+    pd.to_numeric, errors="coerce"
+)
 
 # ===============================
-#   SIDEBAR
+# SIDEBAR
 # ===============================
-st.sidebar.header("📌 Pengaturan")
-chart_choice = st.sidebar.selectbox(
-    "Pilih Grafik",
+st.sidebar.header("⚙️ Pengaturan")
+
+selected_questions = st.sidebar.multiselect(
+    "Pilih Pertanyaan",
+    question_cols,
+    default=question_cols
+)
+
+chart_type = st.sidebar.radio(
+    "Pilih Jenis Grafik",
     [
-        "Distribusi Semua Jawaban (Bar Chart)",
-        "Proporsi Jawaban (Pie Chart)",
-        "Distribusi Jawaban per Pertanyaan (Stacked Bar)",
-        "Rata-Rata Skor Tiap Pertanyaan",
-        "Kategori Positif / Netral / Negatif",
-        "Bonus Radar Chart"
+        "Bar Distribusi",
+        "Pie Proporsi",
+        "Stacked Bar",
+        "Rata-Rata Skor",
+        "Kategori Sentimen",
+        "Radar Chart"
     ]
 )
 
 # ===============================
-#   1️⃣ DISTRIBUSI SEMUA JAWABAN
+# FUNCTION GRAFIK
 # ===============================
-if chart_choice == "Distribusi Semua Jawaban (Bar Chart)":
-    st.subheader("📊 Distribusi Semua Jawaban")
 
-    all_counts = (
-        df[question_cols]
-        .stack()
-        .value_counts()
-        .reindex(skala_order, fill_value=0)
-        .reset_index()
-    )
-    all_counts.columns = ["Jawaban", "Jumlah"]
+def bar_distribusi():
+    data = df[selected_questions].stack().value_counts().reset_index()
+    data.columns = ["Jawaban", "Jumlah"]
 
     fig = px.bar(
-        all_counts,
+        data,
         x="Jawaban",
         y="Jumlah",
         text="Jumlah",
-        color="Jawaban",
-        category_orders={"Jawaban": skala_order},
-        color_discrete_sequence=px.colors.qualitative.Set2
+        color="Jawaban"
     )
-
     fig.update_traces(textposition="outside")
     st.plotly_chart(fig, use_container_width=True)
 
-# ===============================
-#   2️⃣ PIE CHART
-# ===============================
-elif chart_choice == "Proporsi Jawaban (Pie Chart)":
-    st.subheader("🥧 Proporsi Jawaban")
 
-    all_counts = (
-        df[question_cols]
-        .stack()
-        .value_counts()
-        .reindex(skala_order, fill_value=0)
-        .reset_index()
-    )
-    all_counts.columns = ["Jawaban", "Jumlah"]
+def pie_proporsi():
+    data = df[selected_questions].stack().value_counts().reset_index()
+    data.columns = ["Jawaban", "Jumlah"]
 
     fig = px.pie(
-        all_counts,
+        data,
         names="Jawaban",
         values="Jumlah",
-        hole=0.4,
-        category_orders={"Jawaban": skala_order}
+        hole=0.4
     )
-
     fig.update_traces(textinfo="percent+label")
     st.plotly_chart(fig, use_container_width=True)
 
-# ===============================
-#   3️⃣ STACKED BAR
-# ===============================
-elif chart_choice == "Distribusi Jawaban per Pertanyaan (Stacked Bar)":
-    st.subheader("📚 Distribusi Jawaban per Pertanyaan")
 
+def stacked_bar():
     stack_data = pd.DataFrame()
 
-    for q in question_cols:
-        counts = (
-            df[q]
-            .value_counts()
-            .reindex(skala_order, fill_value=0)
-        )
-        stack_data[q] = counts
+    for q in selected_questions:
+        temp = df[q].value_counts().rename(q)
+        stack_data = pd.concat([stack_data, temp], axis=1)
+
+    stack_data = stack_data.fillna(0)
 
     fig = go.Figure()
 
-    for label in skala_order:
+    for label in stack_data.index:
         fig.add_trace(go.Bar(
             name=label,
             x=stack_data.columns,
             y=stack_data.loc[label]
         ))
 
-    fig.update_layout(
-        barmode="stack",
-        xaxis_title="Pertanyaan",
-        yaxis_title="Jumlah Respon"
-    )
-
+    fig.update_layout(barmode="stack")
     st.plotly_chart(fig, use_container_width=True)
 
-# ===============================
-#   4️⃣ RATA-RATA SKOR
-# ===============================
-elif chart_choice == "Rata-Rata Skor Tiap Pertanyaan":
-    st.subheader("⭐ Rata-Rata Skor")
 
-    mean_scores = df_numeric.mean().reset_index()
+def rata_rata():
+    mean_scores = df_numeric[selected_questions].mean().reset_index()
     mean_scores.columns = ["Pertanyaan", "Skor"]
 
     fig = px.bar(
         mean_scores,
         x="Pertanyaan",
         y="Skor",
-        text=mean_scores["Skor"].round(2),
+        text="Skor",
         color="Skor",
         color_continuous_scale="Blues"
     )
-
     fig.update_traces(textposition="outside")
-    fig.update_layout(yaxis_range=[0,5])
-
     st.plotly_chart(fig, use_container_width=True)
 
-# ===============================
-#   5️⃣ POSITIF / NETRAL / NEGATIF
-# ===============================
-elif chart_choice == "Kategori Positif / Netral / Negatif":
-    st.subheader("😀😐🙁 Distribusi Kategori")
 
+def kategori_sentimen():
     kategori_map = {
         "SS": "Positif",
         "S": "Positif",
@@ -196,60 +150,67 @@ elif chart_choice == "Kategori Positif / Netral / Negatif":
         "STS": "Negatif"
     }
 
-    flat = df[question_cols].stack().map(kategori_map)
-
-    kategori_counts = flat.value_counts().reindex(
-        ["Positif", "Netral", "Negatif"],
-        fill_value=0
-    ).reset_index()
-
-    kategori_counts.columns = ["Kategori", "Jumlah"]
+    flat = df[selected_questions].stack().map(kategori_map)
+    data = flat.value_counts().reset_index()
+    data.columns = ["Kategori", "Jumlah"]
 
     fig = px.bar(
-        kategori_counts,
+        data,
         x="Kategori",
         y="Jumlah",
         text="Jumlah",
-        color="Kategori",
-        color_discrete_map={
-            "Positif": "#2ecc71",
-            "Netral": "#f1c40f",
-            "Negatif": "#e74c3c"
-        }
+        color="Kategori"
     )
-
     fig.update_traces(textposition="outside")
     st.plotly_chart(fig, use_container_width=True)
 
-# ===============================
-#   6️⃣ RADAR CHART
-# ===============================
-elif chart_choice == "Bonus Radar Chart":
-    st.subheader("🛡️ Radar Chart Rata-Rata Skor")
 
-    mean_scores = df_numeric.mean()
+def radar_chart():
+    mean_scores = df_numeric[selected_questions].mean()
 
     if len(mean_scores) < 3:
-        st.warning("Radar chart memerlukan minimal 3 pertanyaan.")
-    else:
-        labels = mean_scores.index.tolist()
-        values = mean_scores.values.tolist()
+        st.warning("Minimal 3 pertanyaan untuk radar chart")
+        return
 
-        # tutup polygon
-        labels += [labels[0]]
-        values += [values[0]]
+    labels = mean_scores.index.tolist()
+    values = mean_scores.values.tolist()
 
-        fig = go.Figure()
+    labels += [labels[0]]
+    values += [values[0]]
 
-        fig.add_trace(go.Scatterpolar(
-            r=values,
-            theta=labels,
-            fill="toself"
-        ))
+    fig = go.Figure()
+    fig.add_trace(go.Scatterpolar(
+        r=values,
+        theta=labels,
+        fill="toself"
+    ))
 
-        fig.update_layout(
-            polar=dict(radialaxis=dict(visible=True, range=[0,5])),
-            showlegend=False
-        )
+    fig.update_layout(
+        polar=dict(radialaxis=dict(visible=True, range=[0, 5]))
+    )
 
-        st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True)
+
+
+# ===============================
+# DISPLAY CHART
+# ===============================
+
+if chart_type == "Bar Distribusi":
+    bar_distribusi()
+
+elif chart_type == "Pie Proporsi":
+    pie_proporsi()
+
+elif chart_type == "Stacked Bar":
+    stacked_bar()
+
+elif chart_type == "Rata-Rata Skor":
+    rata_rata()
+
+elif chart_type == "Kategori Sentimen":
+    kategori_sentimen()
+
+elif chart_type == "Radar Chart":
+    radar_chart()
+
